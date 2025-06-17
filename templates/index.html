@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code Review Assistant</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <style>
+        .review-section {
+            margin-bottom: 2rem;
+            padding: 1rem;
+            border-radius: 8px;
+            background-color: #f8f9fa;
+        }
+        .copy-btn {
+            margin-left: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <ul class="nav nav-tabs mb-4" id="mainTabs">
+            <li class="nav-item">
+                <a class="nav-link active" id="reviewTabBtn" href="#" onclick="showTab('reviewTab')">Review</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" id="logsTabBtn" href="#" onclick="showTab('logsTab')">Logs</a>
+            </li>
+        </ul>
+        <div id="reviewTab">
+            <div class="row align-items-center mb-4">
+                <div class="col-auto">
+                    <img src="/static/img/logo.png" alt="App Logo" class="img-fluid" style="max-height: 160px;">
+                </div>
+                <div class="col">
+                    <h1 class="mb-0">Code Review Assistant</h1>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-body">
+                    <form id="reviewForm">
+                        <div class="mb-3">
+                            <label for="reviewName" class="form-label">Review Name</label>
+                            <input type="text" class="form-control mb-3" id="reviewName" required placeholder="Enter a name for this review">
+                            <label for="inputType" class="form-label">Input Type</label>
+                            <select class="form-select" id="inputType" required>
+                                <option value="url">URL</option>
+                                <option value="file">Text File</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="content" class="form-label">Content</label>
+                            <textarea class="form-control" id="content" rows="4" required></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="customPrompt" class="form-label">Custom Reviewer Instructions (optional)</label>
+                            <textarea class="form-control" id="customPrompt" rows="2" placeholder="Add custom instructions for the reviewer (optional)"></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Generate Review</button>
+                    </form>
+                </div>
+            </div>
+            <div id="reviewOutput" class="mt-4">
+                <!-- Review results will be displayed here -->
+            </div>
+            <div class="mt-4">
+                <button id="shutdownBtn" class="btn btn-danger">Finalize Session</button>
+            </div>
+            <div id="shutdownMsg" class="mt-4" style="display:none;font-size:1.2rem;color:#b30000;"></div>
+        </div>
+        <div id="logsTab" style="display:none;">
+            <div class="mb-3">
+                <h2>Review Logs</h2>
+                <div id="logsContent">Loading logs...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('shutdownBtn').onclick = async function() {
+            try {
+                const resp = await fetch('/shutdown', {method: 'POST'});
+                if (resp.ok) {
+                    document.getElementById('shutdownMsg').innerText = 'App finalized, see you next time.';
+                    document.getElementById('shutdownMsg').style.display = 'block';
+                    setTimeout(() => { window.close && window.close(); }, 2000);
+                } else {
+                    alert('Failed to finalize app.');
+                }
+            } catch (e) {
+                alert('Failed to finalize app.');
+            }
+        }
+        document.getElementById('reviewForm').addEventListener('submit', async (e) => {
+            const customPrompt = document.getElementById('customPrompt').value;
+            e.preventDefault();
+            const inputType = document.getElementById('inputType').value;
+            const content = document.getElementById('content').value;
+
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        name: document.getElementById('reviewName').value,
+                        input_type: inputType,
+                        content: content,
+                        custom_prompt: customPrompt
+                    })
+                });
+
+                const data = await response.json();
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                // Display review results using the same JSON viewer as logs
+                const reviewOutput = document.getElementById('reviewOutput');
+                reviewOutput.innerHTML = `<div class="json-viewer" id="liveReviewJsonViewer"></div>`;
+                renderJsonViewer(data.review, document.getElementById('liveReviewJsonViewer'));
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('An error occurred while processing the request.');
+            }
+        });
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Text copied to clipboard!');
+            }).catch(err => {
+                console.error('Failed to copy text: ', err);
+            });
+        }
+        // Tab switching logic
+        function showTab(tabId) {
+            document.getElementById('reviewTab').style.display = tabId === 'reviewTab' ? '' : 'none';
+            document.getElementById('logsTab').style.display = tabId === 'logsTab' ? '' : 'none';
+            document.getElementById('reviewTabBtn').classList.toggle('active', tabId === 'reviewTab');
+            document.getElementById('logsTabBtn').classList.toggle('active', tabId === 'logsTab');
+            if (tabId === 'logsTab') {
+                fetchLogs();
+            }
+        }
+
+        // Fetch and display logs
+        async function fetchLogs() {
+            const logsContent = document.getElementById('logsContent');
+            logsContent.innerHTML = 'Loading logs...';
+            try {
+                const resp = await fetch('/logs');
+                if (!resp.ok) throw new Error('Failed to fetch logs');
+                const logs = await resp.json();
+                if (!Array.isArray(logs) || logs.length === 0) {
+                    logsContent.innerHTML = '<div class="alert alert-info">No logs found.</div>';
+                    return;
+                }
+                let html = '<div class="accordion" id="logsAccordion">';
+                logs.slice().reverse().forEach((log, idx) => {
+                    html += `
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="heading${idx}">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse${idx}" aria-expanded="false" aria-controls="collapse${idx}">
+                                <span class="fw-bold text-primary me-2">${log.name ? log.name : 'Unnamed Review'}</span>
+                                <span class="me-2">${log.timestamp}</span>
+                                <span class="badge bg-secondary me-2">${log.input_type}</span>
+                                <span class="text-truncate" style="max-width:200px;">${(log.content || '').toString().substring(0, 50)}${(log.content && log.content.length > 50 ? '...' : '')}</span>
+                            </button>
+                        </h2>
+                        <div id="collapse${idx}" class="accordion-collapse collapse" aria-labelledby="heading${idx}" data-bs-parent="#logsAccordion">
+                            <div class="accordion-body">
+                                <strong>Input Type:</strong> ${log.input_type}<br>
+                                <strong>Content:</strong> <pre style="white-space:pre-wrap;">${log.content}</pre>
+                                <strong>Model Output:</strong> <div class="json-viewer" id="jsonViewer${idx}"></div>
+                                <strong>Error:</strong> ${log.error ? `<span class='text-danger'>${log.error}</span>` : '<span class="text-success">None</span>'}
+                            </div>
+                        </div>
+                    </div>`;
+                });
+                html += '</div>';
+                logsContent.innerHTML = html;
+                // Render JSON viewers for each model_output
+                logs.slice().reverse().forEach((log, idx) => {
+                    const viewer = document.getElementById(`jsonViewer${idx}`);
+                    if (viewer && log.model_output) {
+                        renderJsonViewer(log.model_output, viewer);
+                    }
+                });
+            } catch (e) {
+                logsContent.innerHTML = `<div class="alert alert-danger">Failed to load logs: ${e.message}</div>`;
+            }
+        }
+
+        // JSON Viewer
+        function renderJsonViewer(obj, container, level = 0) {
+            if (obj === null) {
+                container.innerHTML = '<span class="text-muted">null</span>';
+                return;
+            }
+            if (typeof obj !== 'object') {
+                container.innerHTML = `<span class="text-info">${JSON.stringify(obj)}</span>`;
+                return;
+            }
+            const isArray = Array.isArray(obj);
+            const wrapper = document.createElement('div');
+            wrapper.className = 'json-tree';
+
+            // Special handling for executive_summary (always first)
+            if (!isArray && obj.executive_summary) {
+                const summaryDiv = document.createElement('div');
+                summaryDiv.className = 'alert alert-info mb-2';
+                summaryDiv.innerHTML = `<strong>Executive Summary:</strong><br>${obj.executive_summary}`;
+                wrapper.appendChild(summaryDiv);
+            }
+
+            // Helper to color-code severity
+            function severityBadge(severity) {
+                const sev = (severity || '').toUpperCase();
+                let color = 'secondary';
+                if (sev === 'CRITICAL') color = 'danger';
+                else if (sev === 'MAJOR') color = 'warning';
+                else if (sev === 'MEDIUM') color = 'gold';
+                else if (sev === 'MINOR') color = 'primary';
+                return `<span class="badge bg-${color} ms-1">${sev}</span>`;
+            }
+
+            // Render keys, skipping executive_summary if already handled
+            Object.entries(obj).forEach(([key, value]) => {
+                if (!isArray && key === 'executive_summary') return;
+                const row = document.createElement('div');
+                row.className = 'json-row';
+                // Special handling for review sections with severity
+                if ([
+                    'syntax_review',
+                    'code_style',
+                    'performance_analysis'
+                ].includes(key) && Array.isArray(value)) {
+                    const sectionTitle = document.createElement('div');
+                    sectionTitle.className = 'json-key fw-bold';
+                    sectionTitle.innerHTML = key.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()) + ':';
+                    row.appendChild(sectionTitle);
+                    value.forEach(issue => {
+                        const issueDiv = document.createElement('div');
+                        issueDiv.className = 'json-row ms-3 mb-1';
+                        let main = '';
+                        if (issue.issue) main += `<span class='fw-bold'>${issue.issue}</span> `;
+                        if (issue.severity) main += severityBadge(issue.severity);
+                        if (issue.line !== undefined) main += `<span class='text-muted ms-2'>Line: ${issue.line}</span>`;
+                        issueDiv.innerHTML = main;
+                        if (issue.recommendation) {
+                            issueDiv.innerHTML += `<div class='ms-3'><span class='text-success'>Recommendation:</span> ${issue.recommendation}</div>`;
+                        }
+                        if (issue.alternatives && issue.alternatives.length) {
+                            issueDiv.innerHTML += `<div class='ms-3'><span class='text-info'>Alternatives:</span> <ul>${issue.alternatives.map(a => `<li>${a}</li>`).join('')}</ul></div>`;
+                        }
+                        row.appendChild(issueDiv);
+                    });
+                } else if (typeof value === 'object' && value !== null) {
+                    const toggle = document.createElement('span');
+                    toggle.className = 'json-toggle';
+                    toggle.textContent = '[+]';
+                    toggle.style.cursor = 'pointer';
+                    const keySpan = document.createElement('span');
+                    keySpan.className = 'json-key fw-bold';
+                    keySpan.textContent = isArray ? '' : key + ': ';
+                    const valueDiv = document.createElement('div');
+                    valueDiv.className = 'json-collapsed';
+                    valueDiv.style.display = 'none';
+                    renderJsonViewer(value, valueDiv, level + 1);
+                    toggle.onclick = () => {
+                        if (valueDiv.style.display === 'none') {
+                            valueDiv.style.display = '';
+                            toggle.textContent = '[-]';
+                        } else {
+                            valueDiv.style.display = 'none';
+                            toggle.textContent = '[+]';
+                        }
+                    };
+                    row.appendChild(toggle);
+                    row.appendChild(keySpan);
+                    row.appendChild(valueDiv);
+                } else {
+                    const keySpan = document.createElement('span');
+                    keySpan.className = 'json-key fw-bold';
+                    keySpan.textContent = isArray ? '' : key + ': ';
+                    const valueSpan = document.createElement('span');
+                    valueSpan.className = 'json-value';
+                    valueSpan.textContent = JSON.stringify(value);
+                    row.appendChild(keySpan);
+                    row.appendChild(valueSpan);
+                }
+                wrapper.appendChild(row);
+            });
+            container.appendChild(wrapper);
+        }
+        // Minimal CSS for JSON viewer
+        const style = document.createElement('style');
+        style.innerHTML = `
+        .json-viewer { font-family: monospace; font-size: 1em; }
+        .json-tree { margin-left: 1em; }
+        .json-key { color: #005cc5; }
+        .json-value { color: #24292f; }
+        .json-toggle { color: #d73a49; margin-right: 0.3em; }
+        .json-row { margin-bottom: 2px; }
+        `;
+        document.head.appendChild(style);
+        // Set initial tab
+        showTab('reviewTab');
+    </script>
+</body>
+</html>
